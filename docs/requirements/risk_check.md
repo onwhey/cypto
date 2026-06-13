@@ -1120,8 +1120,10 @@ account_domain
 OrderPlan
 CandidateOrderIntent
 ApprovedOrderIntent
-ExecutionOrder
+ExchangeOrder
 ```
+
+其中 `ExchangeOrder` 指交易所订单状态记录。若当前阶段尚未实现 ExchangeOrder，RiskCheck 只能预留 selector hook；后续 ExchangeOrder 可用后，active_order_guard 必须检查未完成 ExchangeOrder / 交易所未完成订单状态，当前阶段不得越界创建 ExchangeOrder 模型。
 
 RiskCheck 必须：
 

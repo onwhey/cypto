@@ -518,7 +518,10 @@ CandidateOrderIntent
 RiskCheckResult
 ApprovedOrderIntent
 ExecutionPreparation
-ExecutionRecord
+ExecutionResult
+ExchangeOrder
+TradeFill
+PositionState
 ReviewRecord
 ```
 

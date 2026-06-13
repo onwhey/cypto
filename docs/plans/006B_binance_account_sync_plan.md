@@ -35,6 +35,16 @@ management command
 fake client / fixture tests
 ```
 
+006B 只输出：
+
+```text
+账户事实
+余额事实
+仓位事实
+交易规则事实
+同步结果 / 错误状态
+```
+
 006B 不生成：
 
 ```text
@@ -44,8 +54,15 @@ OrderPlan
 CandidateOrderIntent
 RiskCheckResult
 ApprovedOrderIntent
-ExecutionOrder
+ExchangeOrder
+TradeFill
+ExecutionResult
+订单状态事实
+成交状态事实
 ```
+
+006B 不输出 ExchangeOrder / TradeFill / ExecutionResult；订单状态事实和成交状态事实不归属 Binance Account Sync。
+Binance Account Sync 不负责订单状态同步，不负责成交状态同步。
 
 ---
 
@@ -83,8 +100,11 @@ OrderPlan
 CandidateOrderIntent
 RiskCheckResult
 ApprovedOrderIntent
-ExecutionReport
-ExecutionOrder
+ExchangeOrder
+TradeFill
+ExecutionResult
+订单状态事实
+成交状态事实
 ```
 
 ---
@@ -112,6 +132,12 @@ CandidateOrderIntent
 RiskCheckResult
 ApprovedOrderIntent
 Execution
+ExchangeOrder
+TradeFill
+ExecutionResult
+订单状态同步
+成交状态同步
+订单追踪
 007B 风控批准
 仓位计算
 ```
@@ -1449,6 +1475,12 @@ CandidateOrderIntent
 RiskCheckResult
 ApprovedOrderIntent
 Execution
+ExchangeOrder
+TradeFill
+ExecutionResult
+订单状态同步
+成交状态同步
+订单追踪
 007B 风控批准
 真实资金调度
 WebSocket

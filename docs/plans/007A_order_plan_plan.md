@@ -29,7 +29,12 @@ OrderPlan 的唯一职责是：
 → CandidateOrderIntent
 → 007B RiskCheck
 → ApprovedOrderIntent
-→ 后续 ExecutionPreparation / Execution
+→ 后续 ExecutionPreparation
+→ ExecutionPreparationResult / PreparedExecutionRequest
+→ ExecutionResult
+→ ExchangeOrder
+→ TradeFill
+→ PositionState
 → 后续 Tracking
 ```
 
@@ -251,6 +256,7 @@ tests/order_plan/
 ORDER_PLAN_TARGET_NOTIONAL_BASIS = "current_equity"
 ORDER_PLAN_MAX_TARGET_NOTIONAL_TO_EQUITY_RATIO = "3.0"
 ORDER_PLAN_MIN_REBALANCE_NOTIONAL = "20"
+ORDER_PLAN_PRICE_SNAPSHOT_MAX_AGE_SECONDS = 60
 ORDER_PLAN_REQUIRED_POSITION_MODE = "one_way"
 ORDER_PLAN_SUPPORTED_MARKET_TYPES = ["usds_m_futures", "coin_m_futures"]
 ORDER_PLAN_ACTIVE_ORDER_BLOCK_ENABLED = True
@@ -263,6 +269,7 @@ ORDER_PLAN_SCHEMA_VERSION = "v1"
 target_notional_basis P0 固定为 current_equity。
 max_target_notional_to_equity_ratio P0 默认 3.0。
 min_rebalance_notional P0 默认 20。
+ORDER_PLAN_PRICE_SNAPSHOT_MAX_AGE_SECONDS P0 固定为 60，用于 OrderPlan 估值价格快照 TTL 校验。
 ```
 
 P0 不实现：
@@ -531,6 +538,8 @@ account / balance / position / symbol rule 快照完整
 PriceSnapshot 存在
 PriceSnapshot.symbol / market_type / account_domain 匹配
 PriceSnapshot.mark_price 存在且 > 0
+PriceSnapshot 通过 PriceSnapshotService.validate_for_consumption
+reference_time_utc - price_snapshot.as_of_utc <= ORDER_PLAN_PRICE_SNAPSHOT_MAX_AGE_SECONDS
 ```
 
 缺失或不匹配：
@@ -538,6 +547,16 @@ PriceSnapshot.mark_price 存在且 > 0
 ```text
 OrderPlan.status = blocked
 allows_downstream = false
+写 AlertEvent
+```
+
+PriceSnapshot 超过 60 秒：
+
+```text
+OrderPlan.status = blocked
+reason_code = stale_price_snapshot
+allows_downstream = false
+不生成 CandidateOrderIntent
 写 AlertEvent
 ```
 
@@ -571,15 +590,16 @@ OrderPlan 必须在生成新 CandidateOrderIntent 前检查 active order / activ
 OrderPlan
 CandidateOrderIntent
 ApprovedOrderIntent
-ExecutionOrder
+ExchangeOrder
 ```
 
 P0 只检查当前已经实现的模型。
 
-对于尚未实现的 `ApprovedOrderIntent` / `ExecutionOrder`：
+对于尚未实现的 `ApprovedOrderIntent` / `ExchangeOrder`：
 
 ```text
 预留 selector hook；不得为了 active_order_guard 提前实现下游模块。
+后续 ExchangeOrder 可用后，active_order_guard 必须检查未完成 ExchangeOrder / 交易所未完成订单状态。
 ```
 
 只要存在未终结状态的对象：
@@ -1010,7 +1030,22 @@ market_type 匹配
 account_domain 匹配
 mark_price 存在
 mark_price > 0
+PriceSnapshotService.validate_for_consumption 校验通过
+ORDER_PLAN_PRICE_SNAPSHOT_MAX_AGE_SECONDS = 60
+reference_time_utc - price_snapshot.as_of_utc <= ORDER_PLAN_PRICE_SNAPSHOT_MAX_AGE_SECONDS
 ```
+
+如果 PriceSnapshot 超过 60 秒：
+
+```text
+OrderPlan.status = blocked
+reason_code = stale_price_snapshot
+allows_downstream = false
+不生成 CandidateOrderIntent
+写 AlertEvent
+```
+
+PriceSnapshot 未过期且其他输入条件满足时，才允许继续生成 CandidateOrderIntent。
 
 OrderPlan 不执行最终下单前 price guard。
 
@@ -1211,6 +1246,11 @@ JSON 字段可序列化
 价格上涨后 current_position_notional 变化但 quantity 不变
 min_rebalance_notional below threshold → no_order_required
 mark_price 缺失 / <=0 → blocked
+PriceSnapshot 超过 60 秒 → blocked
+reason_code = stale_price_snapshot
+不生成 CandidateOrderIntent
+写 AlertEvent
+PriceSnapshot 未过期且其他条件满足时，才允许继续生成 CandidateOrderIntent
 ```
 
 ### 21.3 COIN-M calculator 测试
@@ -1258,7 +1298,7 @@ order_components_hash 稳定
 不同 market_type 不阻断
 不同 account_domain 不阻断
 已终结状态不阻断
-尚未实现 ApprovedOrderIntent / ExecutionOrder 时不越界创建模型
+尚未实现 ApprovedOrderIntent / ExchangeOrder 时不越界创建模型
 ```
 
 ### 21.6 幂等测试
@@ -1319,9 +1359,11 @@ dry-run 不落库
 2. 读取 BinanceSyncRun。
 3. 读取 account / balance / position / symbol rule 快照。
 4. 读取 PriceSnapshot。
-5. 校验 market_type / account_domain / symbol。
-6. 实现 active_order_guard。
-7. 生成标准化 OrderPlanContext。
+5. 通过 PriceSnapshotService.validate_for_consumption 校验 PriceSnapshot 可消费。
+6. 校验 ORDER_PLAN_PRICE_SNAPSHOT_MAX_AGE_SECONDS = 60。
+7. 校验 market_type / account_domain / symbol。
+8. 实现 active_order_guard。
+9. 生成标准化 OrderPlanContext。
 ```
 
 ### Phase C：calculator
@@ -1412,13 +1454,14 @@ OrderPlan 不判断 CandidateOrderIntent 是否能通过风控。
 9. order_components 可审计，且不把 component 当 Binance 子订单。
 10. min_rebalance_notional 生效。
 11. active_order_guard 生效。
-12. 正式结果写 AlertEvent。
-13. dry-run 不写库、不告警。
-14. OrderPlan 幂等。
-15. CandidateOrderIntent 幂等。
-16. 不实现真实下单、撤单、查订单、查成交。
-17. 不修改 Binance leverage / margin type / position mode。
-18. 测试通过。
+12. PriceSnapshot 超过 60 秒时 blocked，reason_code = stale_price_snapshot，不生成 CandidateOrderIntent，并写 AlertEvent。
+13. 正式结果写 AlertEvent。
+14. dry-run 不写库、不告警。
+15. OrderPlan 幂等。
+16. CandidateOrderIntent 幂等。
+17. 不实现真实下单、撤单、查订单、查成交。
+18. 不修改 Binance leverage / margin type / position mode。
+19. 测试通过。
 ```
 
 ---

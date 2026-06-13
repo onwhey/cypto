@@ -123,8 +123,8 @@ PriceSnapshot：价格事实层，为 OrderPlan / RiskCheck / ExecutionPreparati
 | CandidateOrderIntent | 表达待风控的候选订单意图 | OrderPlan | CandidateOrderIntent | OrderPlan 存储 | 交易所接口、直接执行、绕过 RiskCheck | 不可消费时 RiskCheck 必须 BLOCKED |
 | RiskCheck | 风控审查 CandidateOrderIntent / order_components | CandidateOrderIntent、OrderPlan、BinanceSyncRun、PriceSnapshot、风险规则 | RiskCheckResult、RiskRuleResult、RiskCheckIssue | Account Sync selector、PriceSnapshot、规则插件、AlertEvent | 直接消费 DecisionSnapshot 的动作字段或 ENTER_LONG / ENTER_SHORT / EXIT / HOLD / NO_TRADE 枚举、真实下单、撤单、任意 MODIFY、调杠杆 | ALLOW / DENY / BLOCKED / FAILED 均 AlertEvent |
 | ApprovedOrderIntent | 表示风控通过的订单意图 | RiskCheckResult、selected CandidateOrderIntent | ApprovedOrderIntent | RiskCheck 结果、存储、AlertEvent | 真实下单、修改订单参数、绕过 ExecutionPreparation | 生成失败不得进入 ExecutionPreparation |
-| ExecutionPreparation | 执行前最终保护与准备 | ApprovedOrderIntent、最新 PriceSnapshot、active order 状态、执行配置 | ExecutionPreflightResult、PreparedExecutionOrder / blocked result | PriceSnapshotService、配置、订单状态查询、AlertEvent | 策略、RiskCheck 业务判断、直接改仓位 | price guard 失败或快照过期必须阻断执行 |
-| Execution | 唯一真实下单入口 | PreparedExecutionOrder / ApprovedOrderIntent、执行配置 | ExecutionResult、ExchangeOrder | execution gateway、订单存储、AlertEvent | 策略、原子信号、大模型、Hermes 触发交易、自动调杠杆 | 下单成功/失败/未知均记录并 AlertEvent |
+| ExecutionPreparation | 执行前最终保护与准备 | ApprovedOrderIntent、最新 PriceSnapshot、active order 状态、执行配置 | ExecutionPreparationResult、PreparedExecutionRequest / blocked result | PriceSnapshotService、配置、订单状态查询、AlertEvent | 策略、RiskCheck 业务判断、直接改仓位 | price guard 失败或快照过期必须阻断执行 |
+| Execution | 唯一真实下单入口 | PreparedExecutionRequest / ApprovedOrderIntent、执行配置 | ExecutionResult、ExchangeOrder | execution gateway、订单存储、AlertEvent | 策略、原子信号、大模型、Hermes 触发交易、自动调杠杆 | 下单成功/失败/未知均记录并 AlertEvent |
 | Tracking | 追踪订单、成交和仓位状态 | ExecutionResult、交易所订单/成交/仓位回报 | ExchangeOrder、TradeFill、PositionState、OrderStatusRecord | REST 查询、后续 User Data Stream、存储、AlertEvent | 策略决策、自动改策略、自动调杠杆 | 状态不明必须异常同步/人工恢复 |
 | Hermes / notifications | 发送状态通知 | 业务事件、异常、复盘摘要 | HermesNotification / AlertEvent | notifications service | 交易执行、策略决策、订单生成 | 通知失败必须记录，不改变交易事实 |
 | Review | 聚合证据链并归因 | trace_id、DecisionSnapshot ID、订单/成交/仓位记录 | ReviewRecord、ReviewFinding | 历史数据、审计查询、大模型复盘辅助 | 实时下单、自动改策略 | 复盘失败不得修改生产策略 |
@@ -1307,7 +1307,7 @@ trigger_source
 
 ```text
 ExecutionPreparationResult
-PreparedExecutionOrder
+PreparedExecutionRequest
 ```
 
 ### 23.4 允许调用
@@ -1346,7 +1346,7 @@ price guard 失败必须 blocked。
 
 ### 24.1 职责
 
-负责统一执行 PreparedExecutionOrder / ApprovedOrderIntent。
+负责统一执行 PreparedExecutionRequest / ApprovedOrderIntent。
 
 支持模式：
 
@@ -1359,7 +1359,7 @@ real trading
 ### 24.2 输入对象
 
 ```text
-PreparedExecutionOrder
+PreparedExecutionRequest
 ApprovedOrderIntent
 execution_mode
 交易所配置
@@ -1372,6 +1372,13 @@ trigger_source
 ```text
 ExecutionResult
 ExchangeOrder
+```
+
+说明：
+
+```text
+ExecutionResult 记录执行尝试结果，不等同于交易所订单状态。
+ExchangeOrder 记录交易所订单状态，不等同于成交记录。
 ```
 
 ### 24.4 允许调用
@@ -1431,6 +1438,13 @@ TradeFill
 OrderStatusRecord
 PositionState
 PositionSyncRecord
+```
+
+说明：
+
+```text
+TradeFill 记录真实成交，不等同于仓位状态。
+PositionState 记录仓位事实。
 ```
 
 ### 25.4 允许调用

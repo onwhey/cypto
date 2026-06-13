@@ -21,7 +21,12 @@
 → CandidateOrderIntent
 → 007B RiskCheck
 → ApprovedOrderIntent
-→ ExecutionPreparation / Execution
+→ ExecutionPreparation
+→ ExecutionPreparationResult / PreparedExecutionRequest
+→ ExecutionResult
+→ ExchangeOrder
+→ TradeFill
+→ PositionState
 → Tracking
 ```
 
@@ -31,8 +36,12 @@
 DecisionSnapshot：表达本周期目标仓位意图。
 OrderPlan：把目标仓位转换成候选订单意图。
 RiskCheck：审批、拒绝或阻断候选订单。
-ExecutionPreparation / Execution：执行前检查与真实下单。
-Tracking：跟踪订单状态、成交、部分成交、持仓变化。
+ExecutionPreparation：执行前最终检查，生成 ExecutionPreparationResult / PreparedExecutionRequest。
+ExecutionResult：记录执行尝试结果，不等同于交易所订单状态。
+ExchangeOrder：记录交易所订单状态，不等同于成交记录。
+TradeFill：记录真实成交，不等同于仓位状态。
+PositionState：记录仓位事实。
+Tracking：跟踪交易所订单状态、成交、部分成交、持仓变化。
 ```
 
 OrderPlan 的核心目标是：
@@ -355,7 +364,49 @@ market_type
 symbol / pair
 ```
 
-### 6.3 30 秒与 0.5% price guard 不属于 OrderPlan
+### 6.3 OrderPlan PriceSnapshot 可消费校验
+
+OrderPlan 必须通过 `PriceSnapshotService.validate_for_consumption` 校验 PriceSnapshot 是否可消费。
+
+OrderPlan 使用的估值 TTL 为：
+
+```text
+ORDER_PLAN_PRICE_SNAPSHOT_MAX_AGE_SECONDS = 60
+```
+
+校验内容至少包括：
+
+```text
+PriceSnapshot 存在
+symbol 匹配
+market_type 匹配
+account_domain 匹配
+mark_price 存在且 > 0
+reference_time_utc - price_snapshot.as_of_utc <= ORDER_PLAN_PRICE_SNAPSHOT_MAX_AGE_SECONDS
+```
+
+如果 PriceSnapshot 缺失、身份不匹配、mark_price 不合法或不可消费：
+
+```text
+OrderPlan.status = blocked
+allows_downstream = false
+不生成 CandidateOrderIntent
+写 AlertEvent
+```
+
+如果 PriceSnapshot 超过 60 秒：
+
+```text
+OrderPlan.status = blocked
+allows_downstream = false
+reason_code = stale_price_snapshot
+不生成 CandidateOrderIntent
+写 AlertEvent
+```
+
+该校验属于 007A OrderPlan 自身的输入校验，不能依赖 007B RiskCheck 兜底。
+
+### 6.4 30 秒与 0.5% price guard 不属于 OrderPlan
 
 Execution 前 price guard 属于后续 ExecutionPreparation。
 
@@ -1144,8 +1195,10 @@ account_domain
 OrderPlan
 CandidateOrderIntent
 ApprovedOrderIntent
-ExecutionOrder
+ExchangeOrder
 ```
+
+其中 `ExchangeOrder` 指交易所订单状态记录。若当前阶段尚未实现 ExchangeOrder，OrderPlan 只能预留 selector hook；后续 ExchangeOrder 可用后，active_order_guard 必须检查未完成 ExchangeOrder，当前阶段不得越界创建 ExchangeOrder 模型。
 
 新的 OrderPlan 必须：
 
@@ -1257,6 +1310,8 @@ target_notional_basis = current_equity
 
 max_target_notional_to_equity_ratio = 3.0
 
+ORDER_PLAN_PRICE_SNAPSHOT_MAX_AGE_SECONDS = 60
+
 min_rebalance_notional = 20
 
 rebalance_band_bps = P1，不实现
@@ -1340,6 +1395,13 @@ ApprovedOrderIntent 才能进入 ExecutionPreparation
 
 ```text
 OrderPlan 绑定 price_snapshot_id
+OrderPlan 调用 PriceSnapshotService.validate_for_consumption
+ORDER_PLAN_PRICE_SNAPSHOT_MAX_AGE_SECONDS = 60
+PriceSnapshot 超过 60 秒时，OrderPlan blocked
+reason_code = stale_price_snapshot
+PriceSnapshot 超过 60 秒时不生成 CandidateOrderIntent
+PriceSnapshot 超过 60 秒时写 AlertEvent
+PriceSnapshot 未过期且其他条件满足时，才允许继续生成 CandidateOrderIntent
 OrderPlan 不执行 30 秒 price guard
 ExecutionPreparation price guard 不属于 OrderPlan P0
 ```
